@@ -6,6 +6,7 @@
 import { BugIndicatingError } from '../../../../base/common/errors.js';
 import { OffsetRange } from '../ranges/offsetRange.js';
 import { Point } from './point.js';
+import { Size2D } from './size.js';
 
 export class Rect {
 	public static fromPoint(point: Point): Rect {
@@ -264,5 +265,9 @@ export class Rect {
 
 	withVerticalRange(range: OffsetRange): Rect {
 		return new Rect(this.left, range.start, this.right, range.endExclusive);
+	}
+
+	getSize(): Size2D {
+		return new Size2D(this.width, this.height);
 	}
 }

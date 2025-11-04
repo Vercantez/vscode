@@ -3,172 +3,147 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-
-const layout = distributeFlexBoxLayout(1000, {
-	spaceBefore: { min: 10, max: 100, priority: 2, share: 1 },
-	content: [{ min: 50, max: 100, priority: 2, share: 2 }, { min: 100, max: 500, priority: 1 }],
-	spaceAfter: {},
-});
-
-export interface IFlexBoxPart {
-	width?: number;
+export interface IFlexBoxPartGrowthRule extends IFlexBoxPartExtensionRule {
 	min?: number;
+	rules?: IFlexBoxPartExtensionRule[];
+}
+
+export interface IFlexBoxPartExtensionRule {
 	max?: number;
 	priority?: number;
 	share?: number;
 }
 
+
 /**
- * Distributes a total size into parts defined by min, max and growPriority.
+ * Distributes a total size into parts that each have a list of growth rules.
  * Returns `null` if the layout is not possible.
  * The sum of all returned sizes will be equal to `totalSize`.
  *
- * First, each items gets its minimum size from any priority.
- * Then, remaining space is distributed to items with the highest priority, as long as the max constraint allows it (considering share).
- * This continues with next lower priorities until no space is left.
- *
- * If the sum of all minimum sizes exceeds `totalSize`, `null` is returned.
- * If the sum of all maximum sizes is less than `totalSize`, `null` is also returned.
- *
- * The default for min is 0, for max is Infinity, for priority is 0, for share is 1.
- *
+ * First, each part gets its minimum size.
+ * Then, remaining space is distributed to the rules with the highest priority, as long as the max constraint allows it (considering share).
+ * This continues with next lower priority rules until no space is left.
 */
-export function distributeFlexBoxLayout<T extends Record<string, IFlexBoxPart | IFlexBoxPart[]>>(
+export function distributeFlexBoxLayout<T extends Record<string, IFlexBoxPartGrowthRule | IFlexBoxPartGrowthRule[]>>(
 	totalSize: number,
-	parts: T & Record<string, IFlexBoxPart | IFlexBoxPart[]>
+	parts: T & Record<string, IFlexBoxPartGrowthRule | IFlexBoxPartGrowthRule[]>
 ): Record<keyof T, number> | null {
-	// Flatten all parts into an array with tracking info
-	interface FlatPart {
-		key: keyof T;
-		index?: number; // for array parts
-		min: number;
-		max: number;
-		priority: number;
-		share: number;
-		allocatedSize: number;
-	}
-
-	const flatParts: FlatPart[] = [];
-	for (const key in parts) {
-		const part = parts[key];
+	// Normalize parts to always have array of rules
+	const normalizedParts: Record<string, { min: number; rules: IFlexBoxPartExtensionRule[] }> = {};
+	for (const [key, part] of Object.entries(parts)) {
 		if (Array.isArray(part)) {
-			for (let i = 0; i < part.length; i++) {
-				flatParts.push({
-					key,
-					index: i,
-					min: part[i].min ?? 0,
-					max: part[i].max ?? Infinity,
-					priority: part[i].priority ?? 0,
-					share: part[i].share ?? 1,
-					allocatedSize: 0
-				});
-			}
+			normalizedParts[key] = { min: 0, rules: part };
 		} else {
-			flatParts.push({
-				key,
+			normalizedParts[key] = {
 				min: part.min ?? 0,
-				max: part.max ?? Infinity,
-				priority: part.priority ?? 0,
-				share: part.share ?? 1,
-				allocatedSize: 0
-			});
+				rules: part.rules ?? [{ max: part.max, priority: part.priority, share: part.share }]
+			};
 		}
 	}
 
-	// Check if minimum sizes exceed total
-	const totalMin = flatParts.reduce((sum, p) => sum + p.min, 0);
-	if (totalMin > totalSize) {
+	// Initialize result with minimum sizes
+	const result: Record<string, number> = {};
+	let usedSize = 0;
+	for (const [key, part] of Object.entries(normalizedParts)) {
+		result[key] = part.min;
+		usedSize += part.min;
+	}
+
+	// Check if we can satisfy minimum constraints
+	if (usedSize > totalSize) {
 		return null;
 	}
 
-	// Check if maximum sizes are less than total
-	const totalMax = flatParts.reduce((sum, p) => sum + p.max, 0);
-	if (totalMax < totalSize) {
-		return null;
+	let remainingSize = totalSize - usedSize;
+
+	// Track how much space each part has used from its rules
+	const partRuleUsage: Record<string, number[]> = {};
+	for (const [key, part] of Object.entries(normalizedParts)) {
+		partRuleUsage[key] = new Array(part.rules.length).fill(0);
 	}
 
-	// Allocate minimum sizes first
-	for (const part of flatParts) {
-		part.allocatedSize = part.min;
-	}
+	// Distribute remaining space by priority levels
+	while (remainingSize > 0) {
+		// Find all rules at current highest priority that can still grow
+		const candidateRules: Array<{
+			partKey: string;
+			ruleIndex: number;
+			rule: IFlexBoxPartExtensionRule;
+			priority: number;
+			share: number;
+		}> = [];
 
-	let remainingSize = totalSize - totalMin;
+		for (const [key, part] of Object.entries(normalizedParts)) {
+			for (let i = 0; i < part.rules.length; i++) {
+				const rule = part.rules[i];
+				const currentUsage = partRuleUsage[key][i];
+				const maxSize = rule.max ?? Infinity;
 
-	// Get unique priorities in descending order
-	const priorities = Array.from(new Set(flatParts.map(p => p.priority))).sort((a, b) => b - a);
+				if (currentUsage < maxSize) {
+					candidateRules.push({
+						partKey: key,
+						ruleIndex: i,
+						rule,
+						priority: rule.priority ?? 0,
+						share: rule.share ?? 1
+					});
+				}
+			}
+		}
 
-	// Distribute remaining space by priority
-	for (const priority of priorities) {
-		if (remainingSize <= 0) {
+		if (candidateRules.length === 0) {
+			// No rules can grow anymore, but we have remaining space
 			break;
 		}
 
-		const partsAtPriority = flatParts.filter(p => p.priority === priority);
-		const totalShare = partsAtPriority.reduce((sum, p) => sum + p.share, 0);
+		// Find the highest priority among candidates
+		const maxPriority = Math.max(...candidateRules.map(c => c.priority));
+		const highestPriorityCandidates = candidateRules.filter(c => c.priority === maxPriority);
 
-		if (totalShare === 0) {
-			continue;
+		// Calculate total share
+		const totalShare = highestPriorityCandidates.reduce((sum, c) => sum + c.share, 0);
+
+		// Distribute space proportionally by share
+		let distributedThisRound = 0;
+		const distributions: Array<{ partKey: string; ruleIndex: number; amount: number }> = [];
+
+		for (const candidate of highestPriorityCandidates) {
+			const rule = candidate.rule;
+			const currentUsage = partRuleUsage[candidate.partKey][candidate.ruleIndex];
+			const maxSize = rule.max ?? Infinity;
+			const availableForThisRule = maxSize - currentUsage;
+
+			// Calculate ideal share
+			const idealShare = (remainingSize * candidate.share) / totalShare;
+			const actualAmount = Math.min(idealShare, availableForThisRule);
+
+			distributions.push({
+				partKey: candidate.partKey,
+				ruleIndex: candidate.ruleIndex,
+				amount: actualAmount
+			});
+
+			distributedThisRound += actualAmount;
 		}
 
-		// Calculate how much each part wants based on its share
-		let spaceToDistribute = remainingSize;
-		let iterationCount = 0;
-		const maxIterations = partsAtPriority.length * 2; // Prevent infinite loops
-
-		while (spaceToDistribute > 0.001 && iterationCount < maxIterations) {
-			iterationCount++;
-			let distributedThisRound = 0;
-			let activeShare = 0;
-
-			// Calculate active share (parts that haven't reached max)
-			for (const part of partsAtPriority) {
-				if (part.allocatedSize < part.max) {
-					activeShare += part.share;
-				}
-			}
-
-			if (activeShare === 0) {
-				break;
-			}
-
-			for (const part of partsAtPriority) {
-				if (part.allocatedSize >= part.max) {
-					continue;
-				}
-
-				const shareRatio = part.share / activeShare;
-				const desiredIncrease = spaceToDistribute * shareRatio;
-				const maxIncrease = part.max - part.allocatedSize;
-				const actualIncrease = Math.min(desiredIncrease, maxIncrease);
-
-				part.allocatedSize += actualIncrease;
-				distributedThisRound += actualIncrease;
-			}
-
-			spaceToDistribute -= distributedThisRound;
-
-			if (distributedThisRound < 0.001) {
-				break;
-			}
+		if (distributedThisRound === 0) {
+			// No progress can be made
+			break;
 		}
 
-		remainingSize = spaceToDistribute;
-	}
+		// Apply distributions
+		for (const dist of distributions) {
+			result[dist.partKey] += dist.amount;
+			partRuleUsage[dist.partKey][dist.ruleIndex] += dist.amount;
+		}
 
-	// Build result object
-	const result: any = {};
-	for (const key in parts) {
-		const part = parts[key];
-		if (Array.isArray(part)) {
-			const sizes = flatParts
-				.filter(p => p.key === key)
-				.map(p => p.allocatedSize);
-			result[key] = sizes.reduce((sum, size) => sum + size, 0);
-		} else {
-			const flatPart = flatParts.find(p => p.key === key && p.index === undefined);
-			result[key] = flatPart!.allocatedSize;
+		remainingSize -= distributedThisRound;
+
+		// Break if remaining is negligible (floating point precision)
+		if (remainingSize < 0.0001) {
+			break;
 		}
 	}
 
-	return result;
+	return result as Record<keyof T, number>;
 }

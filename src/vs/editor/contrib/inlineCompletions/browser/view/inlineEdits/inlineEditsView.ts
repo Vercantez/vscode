@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { $ } from '../../../../../../base/browser/dom.js';
-import { equalsIfDefined, itemEquals } from '../../../../../../base/common/equals.js';
+import { equalsIfDefined, itemEquals, itemsEquals } from '../../../../../../base/common/equals.js';
 import { BugIndicatingError, onUnexpectedError } from '../../../../../../base/common/errors.js';
 import { Event } from '../../../../../../base/common/event.js';
 import { Disposable } from '../../../../../../base/common/lifecycle.js';
@@ -280,7 +280,13 @@ export class InlineEditsView extends Disposable {
 		));
 
 		this._inlineDiffView = this._register(new OriginalEditorInlineDiffView(this._editor, this._inlineDiffViewState, this._previewTextModel));
-		this._wordReplacementViews = mapObservableArrayCached(this, this._uiState.map(s => s?.state?.kind === 'wordReplacements' ? s.state.replacements : []), (e, store) => {
+		const wordReplacements = derivedOpts({
+			equalsFn: itemsEquals(itemEquals())
+		}, reader => {
+			const s = this._uiState.read(reader);
+			return s?.state?.kind === 'wordReplacements' ? s.state.replacements : [];
+		});
+		this._wordReplacementViews = mapObservableArrayCached(this, wordReplacements, (e, store) => {
 			return store.add(this._instantiationService.createInstance(InlineEditsWordReplacementView, this._editorObs, e, this._tabAction));
 		});
 		this._lineReplacementView = this._register(this._instantiationService.createInstance(InlineEditsLineReplacementView,
