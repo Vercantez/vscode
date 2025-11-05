@@ -10,7 +10,7 @@ import { CancellationError } from '../../../../base/common/errors.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { autorun } from '../../../../base/common/observable.js';
 import { ToolDataSource } from '../../chat/common/languageModelToolsService.js';
-import { IMcpServer, IMcpServerStartOpts, IMcpService, McpConnectionState, McpServerCacheState, McpServerLaunch, McpServerTransportType } from './mcpTypes.js';
+import { IMcpServer, IMcpServerStartOpts, IMcpService, McpConnectionState, McpServerCacheState, McpServerTransportType } from './mcpTypes.js';
 
 
 /**
